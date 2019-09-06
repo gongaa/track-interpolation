@@ -186,6 +186,18 @@ class InterpolationOptions():
 										default='HRNet', 
 										help='model to use',
 										choices=['HRNet', 'VAEHRNet', 'TrackGenV4Test'])  					  
+		self.parser.add_argument('--frame_global_disc_model', dest='frame_global_disc_model', 
+										default='FrameGlobalDiscriminator', 
+										help='model to use',
+										choices=['FrameGlobalDiscriminator'])  					  
+		self.parser.add_argument('--ins_global_disc_model', dest='ins_global_disc_model', 
+										default='InstanceSNDiscriminator', 
+										help='model to use',
+										choices=['InstanceSNDiscriminator'])  					  
+		self.parser.add_argument('--ins_video_disc_model', dest='ins_videl_disc_model', 
+										default='VideoSNDiscriminator', 
+										help='model to use',
+										choices=['VideoSNDiscriminator'])  					  
 		self.parser.add_argument('--pretrained_coarse', dest='pretrained_coarse',
 								help='whether train coarse model ', 
 								action='store_true')
@@ -197,6 +209,12 @@ class InterpolationOptions():
 										choices =['adamax','adam', 'sgd'], 
 										default="adamax")
 		self.parser.add_argument('--coarse_lr', dest='coarse_learning_rate', 
+										help='coarse learning rate',
+										default=0.001, type=float)	
+		self.parser.add_argument('--disc_frame_lr', dest='frame_global_disc_learning_rate', 
+										help='coarse learning rate',
+										default=0.001, type=float)	
+		self.parser.add_argument('--disc_ins_lr', dest='ins_global_disc_learning_rate', 
 										help='coarse learning rate',
 										default=0.001, type=float)	
 		self.parser.add_argument('--load_coarse', dest='load_coarse',

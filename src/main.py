@@ -22,7 +22,7 @@ from time import time
 import warnings
 warnings.filterwarnings("ignore")
 
-from trainer import Trainer 
+# from trainer import Trainer 
 
 def get_exp_path():
 	'''Retrun new experiment path.'''

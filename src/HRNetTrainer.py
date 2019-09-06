@@ -44,17 +44,31 @@ class HRNetTrainer:
 
         args.logger.info('Initializing trainer')
         self.coarse_model = nets.__dict__[args.coarse_model](args)
+        self.frame_global_disc_model = nets.__dict__[args.frame_global_disc_model](args)
+        self.ins_global_disc_model = nets.__dict__[args.ins_global_disc_model](args)
+        self.ins_video_disc_model = nets.__dict__[args.ins_video_disc_model](args)
         if not self.args.train_coarse:
             self.set_net_grad(self.coarse_model, False)
        
         params_cnt = count_parameters(self.coarse_model)
         args.logger.info("coarse params "+str(params_cnt))
 
+        ########################## put models on gpu ##############################
         torch.cuda.set_device(args.rank)
         self.coarse_model.cuda(args.rank)
         self.coarse_model = torch.nn.parallel.DistributedDataParallel(self.coarse_model,
                 device_ids=[args.rank])
-        
+        self.frame_global_disc_model.cuda(args.rank)
+        self.frame_global_disc_model= torch.nn.parallel.DistributedDataParallel(self.frame_global_disc_model,
+                device_ids=[args.rank])
+        self.ins_global_disc_model.cuda(args.rank)
+        self.ins_global_disc_model= torch.nn.parallel.DistributedDataParallel(self.ins_global_disc_model,
+                device_ids=[args.rank])
+        self.ins_video_disc_model.cuda(args.rank)
+        self.ins_video_disc_model= torch.nn.parallel.DistributedDataParallel(self.ins_video_disc_model,
+                device_ids=[args.rank])
+        ############################################################################ 
+
         if self.args.split in ['train', 'val']:
             train_dataset, val_dataset = get_dataset(args)
 
@@ -71,7 +85,19 @@ class HRNetTrainer:
             self.VGGLoss = VGGLoss().cuda(args.rank)
             self.IOULoss = IOULoss().cuda(args.rank)
 
+            self.FrameDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            self.FrameDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+
+            self.VideoDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            self.VideoDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            
+            self.InsDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            self.InsDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+
             self.coarse_opt = torch.optim.Adamax(list(self.coarse_model.parameters()), lr = args.coarse_learning_rate) 
+            self.frame_global_disc_opt = torch.optim.Adam(list(self.frame_global_disc_model.parameters()), lr = args.frame_global_disc_learning_rate)
+            self.ins_global_disc_opt = torch.optim.Adam(list(self.ins_global_disc_model.parameters()), lr=args.ins_global_disc_learning_rate) 
+            self.ins_video_disc_opt = torch.optim.Adam(list(self.ins_video_disc_model.parameters()), lr=args.ins_global_disc_learning_rate) 
             # self.coarse_opt = torch.optim.Adamax(list(self.model.module.coarse_model.parameters()), lr=args.coarse_learning_rate)
             
 
@@ -101,22 +127,8 @@ class HRNetTrainer:
         self.mean = torch.tensor([0.287, 0.3253, 0.284])[:, None, None]#.cuda()
         self.std = torch.tensor([0.1792, 0.18213, 0.1799898])[:, None, None]#.cuda()
 
-        # if args.resume or ( args.split != 'train' and not args.checkepoch_range) :#or self.args.load_coarse or self.args.load_refine:
-        #     self.load_checkpoint()
-
-        if self.args.pretrained_coarse:
-            new_ckpt = OrderedDict()
-            device = torch.device('cpu')
-            # coarse_model_dict = self.model.module.coarse_model.state_dict()
-            coarse_model_dict = self.coarse_model.state_dict()
-            ckpt = torch.load(self.args.pretrained_coarse_model, map_location=device)
-            for key,item in ckpt['coarse_model'].items():
-                new_ckpt[key] = item
-            coarse_model_dict.update(new_ckpt)
-            self.coarse_model.load_state_dict(coarse_model_dict)
-            self.coarse_opt.load_state_dict(ckpt['coarse_opt'])
-            self.epoch = ckpt['epoch']+1
-            print('successful loading pretrained coarse model')
+        #################TODO: wrap this into self.load_checkpoint #################
+        self.load_coarse_model()
 
         if args.rank == 0:
             writer_name = args.path+'/{}_int_{}_len_{}_{}_logs'.format(self.args.split, int(self.args.interval), self.args.vid_length, self.args.dataset)
@@ -230,7 +242,19 @@ class HRNetTrainer:
         'coarse_vgg_glb_loss_record' :0,      # global
         'coarse_ce_glb_loss_record'  :0,      # global ce (with mask later)
         # 'coarse_ce_ins_loss_record'  :0,      # instance ce
-        'coarse_all_loss_record'     :0
+        'coarse_all_loss_record'     :0,
+
+        'disc_frame_loss_record'     :0,      # generator wnats to maximize
+        'disc_frame_fake_loss_record':0,
+        'disc_frame_real_loss_record':0,
+
+        'disc_video_loss_record'     :0,      
+        'disc_video_fake_loss_record':0,
+        'disc_video_real_loss_record':0,
+
+        'disc_ins_loss_record'       :0,
+        'disc_ins_fake_loss_record:' :0,
+        'disc_ins_real_loss_record:' :0,
         }
 
         D.update(d)
@@ -239,12 +263,22 @@ class HRNetTrainer:
 
     def update_loss_record_dict(self, record_dict, loss_dict, batch_size):
         record_dict['data_cnt']+=batch_size
-        loss_name_list = ['iou', 'l1_glb', 'vgg_ins', 'vgg_glb', 'ce_glb']#, 'ce_ins']
 
+        loss_name_list = ['iou', 'l1_glb', 'vgg_ins', 'vgg_glb', 'ce_glb']#, 'ce_ins']
         for loss_name in loss_name_list:
             record_dict['coarse_{}_loss_record'.format(loss_name)] += \
                             batch_size*loss_dict['coarse_{}_loss'.format(loss_name)].item()
             record_dict['coarse_all_loss_record'] += batch_size*loss_dict['coarse_{}_loss'.format(loss_name)].item()
+        
+        ###########TODO: video discriminator ##############
+        disc_name_list = ['frame', 'video', 'ins']
+        for disc_name in disc_name_list:
+            record_dict['disc_{}_loss_record'.format(loss_name)] += \
+                            batch_size*loss_dict['disc_{}_loss'.format(disc_name)].item()
+            for loss_name in ['real', 'fake']:
+                record_dict['disc_{}_{}_loss_record'.format(disc_name, loss_name)] += \
+                    batch_size*loss_dict['disc_{}_{}_loss'.format(disc_name, loss_name)].item()
+
 
         record_dict['all_loss_record']+=batch_size*loss_dict['loss_all'].item()
         return record_dict
@@ -270,7 +304,7 @@ class HRNetTrainer:
         back_instance_masks = torch.cat(back_instance_masks, dim=0)
         return for_instance_masks, back_instance_masks
 
-    def get_coarse_instance(self, rgb, seg, bbox):
+    def get_coarse_instance(self, rgb, bbox):
         # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
         # for_patch = for_img[i, :, int(for_box[1]):int(for_box[3])+1, int(for_box[2]):int(for_box[4])+1]
         # for_patch = F.interpolate(for_patch.unsqueeze(0), size=(self.H, self.W), mode='bilinear', align_corners=True)
@@ -320,6 +354,7 @@ class HRNetTrainer:
         end = time()
         load_time = 0
         comp_time = 0
+        GAN_TRAIN_STEP = 0
         
         for step, data in enumerate(self.train_loader):
             # if step < 1500:
@@ -346,8 +381,8 @@ class HRNetTrainer:
             ###################### TODO: wrap extract mask accoring to coordinate to a function ###################################
             with torch.no_grad():
                 for_instance_masks, back_instance_masks = self.make_instance_masks(for_bbox=for_bbox, back_bbox=back_bbox, gt_x=gt_x, bs=batch_size)
-            input = torch.cat([data['seg1'], data['frame1'], data['frame3'], data['seg3']], dim=1).cuda(self.args.rank, non_blocking=True)
-            input = torch.cat([for_instance_masks, input, back_instance_masks], dim=1)
+            input_without_mask = torch.cat([data['seg1'], data['frame1'], data['frame3'], data['seg3']], dim=1).cuda(self.args.rank, non_blocking=True)
+            input = torch.cat([for_instance_masks, input_without_mask, back_instance_masks], dim=1)
             ##################### TODO: my hrnet forward ###########################
             # 1. get coarse rgb and seg and (y1, 255-x2, y2, 255-x1)
             coarse_rgb, coarse_seg, coarse_gen_bbox = self.coarse_model(input=input) 
@@ -371,17 +406,20 @@ class HRNetTrainer:
                 merged_union_mask = union_mask[:,0,:,:] | union_mask[:,1,:,:] | union_mask[:,2,:,:] | union_mask[:,3,:,:]
                 outside_mask = (1-merged_union_mask)[:,None,:,:]        # expect (bs, 1, 128, 256)
             # 4. calculate other losses
-            #######################################################################
-            #################TODO: think carefully whether we need instance cross entropy ####################
+            ##################################################################################################
+            ################# TODO: think carefully whether we need instance cross entropy ####################
             # coarse_instance_rgb, coarse_instance_seg = self.get_coarse_instance(rgb=coarse_rgb, seg=coarse_seg, bbox=coarse_gen_bbox)
             # gt_instance_rgb, gt_instance_seg = self.get_coarse_instance(rgb=gt_x, seg=gt_seg, bbox=gt_bbox) # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
-            coarse_instance_rgb = self.get_coarse_instance(rgb=coarse_rgb, seg=coarse_seg, bbox=coarse_gen_bbox)
-            gt_instance_rgb = self.get_coarse_instance(rgb=gt_x, seg=gt_seg, bbox=gt_bbox) # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
+            coarse_instance_rgb = self.get_coarse_instance(rgb=coarse_rgb, bbox=coarse_gen_bbox)
+            gt_instance_rgb = self.get_coarse_instance(rgb=gt_x, bbox=gt_bbox) # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
+            with torch.no_grad():
+                for_instance_rgb = self.get_coarse_instance(rgb=input_without_mask[:,1:4,:,:], bbox=for_bbox)
+                back_instance_rgb = self.get_coarse_instance(rgb=input_without_mask[:,4:7,:,:], bbox=back_bbox)
             # (bs*num_track,3,64,64), (bs*num_track,20,64,64)
             # 3. update outputs and store them
             prefix = 'coarse'
             loss_dict[prefix+'_iou_loss'] = -torch.mean(iou)    # minimize -iou, expect iou to be high
-            if self.epoch<=2:
+            if self.epoch<=30:
                 loss_dict[prefix+'_l1_glb_loss'] = self.L1Loss(coarse_rgb, gt_x)
                 # loss_dict[prefix+'_ce_glb_loss']  = 0.1 * self.CELoss(coarse_seg, (gt_seg).long().squeeze(1))    # from (bs, 1, H, W) to (bs, H, W)
             else:
@@ -392,17 +430,54 @@ class HRNetTrainer:
             loss_dict[prefix+'_ce_glb_loss']  = 0.1 * self.CELoss(coarse_seg, gt_seg.long().squeeze(1))    # from (bs, 1, H, W) to (bs, H, W)
             # loss_dict[prefix+'_ce_ins_loss']  = 0.1 * self.CELoss(coarse_instance_seg, gt_instance_seg.long().squeeze(1))
 
+            ######################################### GAN LOSS #####################################################################
+            D_fake_frame_prob, D_real_frame_prob = self.frame_global_disc_model(coarse_rgb.detach()), self.frame_global_disc_model(gt_x)
+            D_fake_ins_prob, D_real_ins_prob = self.ins_global_disc_model(coarse_instance_rgb.detach()), self.ins_global_disc_model(gt_instance_rgb)
+            D_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
+            D_real_video_prob = self.ins_video_disc_model(middle=gt_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
+            G_fake_frame_prob, G_fake_ins_prob = self.frame_global_disc_model(coarse_rgb), self.ins_global_disc_model(coarse_instance_rgb)
+            G_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb, first=for_instance_rgb, last=back_instance_rgb)
+
+
+            loss_dict['disc_frame_loss']    = self.FrameDisc_GLoss(G_fake_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.FrameDisc_GLoss(G_fake_frame_prob, True)*0
+            loss_dict['disc_frame_real_loss'] = self.FrameDisc_DLoss(D_real_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.FrameDisc_DLoss(D_real_frame_prob, True)*0
+            loss_dict['disc_frame_fake_loss'] = self.FrameDisc_DLoss(D_fake_frame_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.FrameDisc_DLoss(D_fake_frame_prob, False)*0
+
+                                                    
+            loss_dict['disc_video_loss']    = self.VideoDisc_GLoss(G_fake_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.VideoDisc_GLoss(G_fake_video_prob, True)*0
+            loss_dict['disc_video_real_loss'] = self.VideoDisc_DLoss(D_real_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.VideoDisc_DLoss(D_real_video_prob, True)*0
+            loss_dict['disc_video_fake_loss'] = self.VideoDisc_DLoss(D_fake_video_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.VideoDisc_DLoss(D_fake_video_prob, False)*0
+
+            loss_dict['disc_ins_loss']    = self.InsDisc_GLoss(G_fake_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.InsDisc_GLoss(G_fake_ins_prob, True)*0
+            loss_dict['disc_ins_real_loss'] = self.InsDisc_DLoss(D_real_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.InsDisc_DLoss(D_real_ins_prob, True)*0
+            loss_dict['disc_ins_fake_loss'] = self.InsDisc_DLoss(D_fake_ins_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+                                                self.InsDisc_DLoss(D_fake_ins_prob, False)*0
+            ##########################################################################################################################
             loss = 0
             for i in loss_dict.values():
                 loss += torch.mean(i)
             loss_dict['loss_all'] = loss
             self.sync(loss_dict)
-            # backward pass
+            ####################### backward pass ###################################
             self.coarse_opt.zero_grad()     if self.args.train_coarse  else None
+            self.frame_global_disc_opt.zero_grad()
+            self.ins_global_disc_opt.zero_grad()
+            self.ins_video_disc_opt.zero_grad()
 
             loss_dict['loss_all'].backward()
             self.coarse_opt.step()  if self.args.train_coarse  else None
-            
+            self.frame_global_disc_opt.step()
+            self.ins_global_disc_opt.step()
+            self.ins_video_disc_opt.step()
+            ##########################################################################
             comp_time += time() - end
             end = time()
 
@@ -600,51 +675,30 @@ class HRNetTrainer:
             'epoch': self.epoch + 1,
             'coarse_model': self.coarse_model.state_dict(),
             'coarse_opt': self.coarse_opt.state_dict(),
+            'frame_global_disc_model': self.frame_global_disc_model.state_dict(),
+            'frame_global_disc_opt': self.frame_global_disc_opt.state_dict(),
+            'ins_global_disc_model': self.ins_global_disc_model.state_dict(),
+            'ins_global_disc_opt': self.ins_global_disc_opt.state_dict(),
+            'ins_video_disc_model': self.ins_video_disc_model.state_dict(),
+            'ins_video_disc_opt': self.ins_video_disc_opt.state_dict()
         }
-        # if self.args.track_gen:
-        #     save_dict['track_gen_model'] = self.model.module.track_gen_model.state_dict()
-        #     save_dict['track_gen_opt'] = self.track_gen_opt.state_dict()
         
         torch.save(save_dict, save_name)
         self.args.logger.info('save model: {}'.format(save_name))
 
-    def load_checkpoint(self):
-        load_md_dir = '{}_{}_{}_{}'.format(self.args.load_model, self.args.mode, self.args.syn_type, self.args.checksession)
-        if self.args.load_dir is not None:
-            load_name = os.path.join(self.args.load_dir,
-                                    'checkpoint',
-                                    load_md_dir+'_{}_{}.pth'.format(self.args.checkepoch, self.args.checkpoint))
-        else:
-            load_name = os.path.join(load_md_dir+'_{}_{}.pth'.format(self.args.checkepoch, self.args.checkpoint))
-        self.args.logger.info('Loading checkpoint %s' % load_name)
-        device = torch.device('cpu')
-        ckpt = torch.load(load_name, map_location=device)
-        
-        # load model parameters first
-        if self.args.load_coarse:
+    def load_coarse_model(self):
+        if self.args.pretrained_coarse:
             new_ckpt = OrderedDict()
+            device = torch.device('cpu')
+            # coarse_model_dict = self.model.module.coarse_model.state_dict()
             coarse_model_dict = self.coarse_model.state_dict()
+            ckpt = torch.load(self.args.pretrained_coarse_model, map_location=device)
             for key,item in ckpt['coarse_model'].items():
                 new_ckpt[key] = item
             coarse_model_dict.update(new_ckpt)
             self.coarse_model.load_state_dict(coarse_model_dict)
-            
+            self.coarse_opt.load_state_dict(ckpt['coarse_opt'])
+            self.epoch = ckpt['epoch']+1
+            print('successful loading pretrained coarse model')
 
-        # load opt
-        if self.args.split == 'train':
-            # load coarse opt
-            if self.args.train_coarse and self.args.load_coarse:
-                self.coarse_opt.load_state_dict(ckpt['coarse_opt'])
-                for state in self.coarse_opt.state.values():
-                    for k, v in state.items():
-                        if isinstance(v, torch.Tensor):
-                            state[k] = v.cuda(self.args.rank)
-                
-        if self.args.resume:
-            assert ckpt['epoch']-1 == self.args.checkepoch, [ckpt['epoch'], self.args.checkepoch]
-            self.epoch = ckpt['epoch']
-        elif self.args.split != 'train':
-            assert ckpt['epoch']-1 == self.args.checkepoch, [ckpt['epoch'], self.args.checkepoch]
-            self.epoch = ckpt['epoch'] - 1
-        self.args.logger.info('checkpoint loaded')
 
