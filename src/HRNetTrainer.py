@@ -85,19 +85,21 @@ class HRNetTrainer:
             self.VGGLoss = VGGLoss().cuda(args.rank)
             self.IOULoss = IOULoss().cuda(args.rank)
 
-            self.FrameDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
-            self.FrameDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            self.BCELoss = nn.BCELoss().cuda(args.rank)
 
-            self.VideoDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
-            self.VideoDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            # self.FrameDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            # self.FrameDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+
+            # self.VideoDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            # self.VideoDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
             
-            self.InsDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
-            self.InsDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            # self.InsDisc_DLoss = GANScalarLoss(weight=1).cuda(args.rank)
+            # self.InsDisc_GLoss = GANScalarLoss(weight=1).cuda(args.rank)
 
-            self.coarse_opt = torch.optim.Adamax(list(self.coarse_model.parameters()), lr = args.coarse_learning_rate) 
-            self.frame_global_disc_opt = torch.optim.Adam(list(self.frame_global_disc_model.parameters()), lr = args.frame_global_disc_learning_rate)
-            self.ins_global_disc_opt = torch.optim.Adam(list(self.ins_global_disc_model.parameters()), lr=args.ins_global_disc_learning_rate) 
-            self.ins_video_disc_opt = torch.optim.Adam(list(self.ins_video_disc_model.parameters()), lr=args.ins_global_disc_learning_rate) 
+            self.coarse_opt = torch.optim.Adamax(list(self.coarse_model.parameters()), lr = args.coarse_learning_rate, betas=(0.5, 0.999)) 
+            self.frame_global_disc_opt = torch.optim.Adam(list(self.frame_global_disc_model.parameters()), lr = args.frame_global_disc_learning_rate, betas=(0.5, 0.999))
+            self.ins_global_disc_opt = torch.optim.Adam(list(self.ins_global_disc_model.parameters()), lr=args.ins_global_disc_learning_rate, betas=(0.5, 0.999)) 
+            self.ins_video_disc_opt = torch.optim.Adam(list(self.ins_video_disc_model.parameters()), lr=args.ins_global_disc_learning_rate, betas=(0.5, 0.999)) 
             # self.coarse_opt = torch.optim.Adamax(list(self.model.module.coarse_model.parameters()), lr=args.coarse_learning_rate)
             
 
@@ -124,8 +126,10 @@ class HRNetTrainer:
         self.global_step = 0
         self.epoch=1
 
-        self.mean = torch.tensor([0.287, 0.3253, 0.284])[:, None, None]#.cuda()
-        self.std = torch.tensor([0.1792, 0.18213, 0.1799898])[:, None, None]#.cuda()
+        # self.mean = torch.tensor([0.287, 0.3253, 0.284])[:, None, None]#.cuda()
+        # self.std = torch.tensor([0.1792, 0.18213, 0.1799898])[:, None, None]#.cuda()
+        self.mean = torch.tensor([0.5, 0.5, 0.5])[:, None, None]#.cuda()
+        self.std = torch.tensor([0.5, 0.5, 0.5])[:, None, None]#.cuda()
 
         #################TODO: wrap this into self.load_checkpoint #################
         self.load_coarse_model()
@@ -236,7 +240,7 @@ class HRNetTrainer:
             'all_loss_record':0}
 
         d = {
-        'coarse_iou_loss_record'     :0,      # iou loss of bbox
+        # 'coarse_iou_loss_record'     :0,      # iou loss of bbox
         'coarse_l1_glb_loss_record'  :0,      # global l1 (with mask later)
         'coarse_vgg_ins_loss_record' :0,      # instance
         'coarse_vgg_glb_loss_record' :0,      # global
@@ -253,8 +257,8 @@ class HRNetTrainer:
         'disc_video_real_loss_record':0,
 
         'disc_ins_loss_record'       :0,
-        'disc_ins_fake_loss_record:' :0,
-        'disc_ins_real_loss_record:' :0,
+        'disc_ins_fake_loss_record' :0,
+        'disc_ins_real_loss_record' :0,
         }
 
         D.update(d)
@@ -264,7 +268,7 @@ class HRNetTrainer:
     def update_loss_record_dict(self, record_dict, loss_dict, batch_size):
         record_dict['data_cnt']+=batch_size
 
-        loss_name_list = ['iou', 'l1_glb', 'vgg_ins', 'vgg_glb', 'ce_glb']#, 'ce_ins']
+        loss_name_list = ['l1_glb', 'vgg_ins', 'vgg_glb', 'ce_glb']#, 'iou', 'ce_ins']
         for loss_name in loss_name_list:
             record_dict['coarse_{}_loss_record'.format(loss_name)] += \
                             batch_size*loss_dict['coarse_{}_loss'.format(loss_name)].item()
@@ -273,7 +277,7 @@ class HRNetTrainer:
         ###########TODO: video discriminator ##############
         disc_name_list = ['frame', 'video', 'ins']
         for disc_name in disc_name_list:
-            record_dict['disc_{}_loss_record'.format(loss_name)] += \
+            record_dict['disc_{}_loss_record'.format(disc_name)] += \
                             batch_size*loss_dict['disc_{}_loss'.format(disc_name)].item()
             for loss_name in ['real', 'fake']:
                 record_dict['disc_{}_{}_loss_record'.format(disc_name, loss_name)] += \
@@ -282,6 +286,13 @@ class HRNetTrainer:
 
         record_dict['all_loss_record']+=batch_size*loss_dict['loss_all'].item()
         return record_dict
+
+    def confine_in_area(self, bbox):
+        if bbox[0] < 0: bbox[0] = 0
+        if bbox[1] < 0: bbox[1] = 0
+        h, w = self.args.input_h, self.args.input_w
+        if bbox[2] >= h: bbox[2] = h-1
+        if bbox[3] >= w: bbox[3] = w-1
 
     def make_instance_masks(self, for_bbox, back_bbox, gt_x, bs):
         for_instance_masks = []
@@ -292,6 +303,8 @@ class HRNetTrainer:
             for j in range(self.args.num_track_per_img):
                 for_coord = for_bbox[i,j,:]
                 back_coord = back_bbox[i,j,:]
+                self.confine_in_area(for_coord)
+                self.confine_in_area(back_coord)
                 for_mask = torch.zeros_like(gt_x[0,0,:,:])
                 back_mask = torch.zeros_like(for_mask)
                 for_mask[int(for_coord[0]):int(for_coord[2])+1, int(for_coord[1]):int(for_coord[3])+1] = 1
@@ -328,20 +341,18 @@ class HRNetTrainer:
         # 0<=bbox[0]<=bbox[2]<=127 (h-1)
         # 0<=bbox[1]<=bbox[3]<=255 (w-1)
         padding = [0,0,0,0]
+        self.confine_in_area(bbox)
         hh, ww = bbox[2]-bbox[0], bbox[3]-bbox[1]
         half_e = float(max(hh, ww))/2.0
-        if half_e < 2:
-            half_e = 4
+        if half_e < 4: half_e = 4
+        elif half_e>=64: half_e=64
         mid_h, mid_w = bbox[0] + float(hh)/2.0, bbox[1] + float(ww)/2.0
         square_bbox = [int(mid_h-half_e), int(mid_w-half_e), int(mid_h+half_e), int(mid_w+half_e)]
         padding[0] = 0 if (square_bbox[0]>=0) else -square_bbox[0]
         padding[1] = 0 if (square_bbox[1]>=0) else -square_bbox[1]
         padding[2] = 0 if (square_bbox[2]<h) else square_bbox[2]-h+1
         padding[3] = 0 if (square_bbox[3]<w) else square_bbox[3]-w+1
-        square_bbox[0] = max(0, square_bbox[0])
-        square_bbox[1] = max(0, square_bbox[1])
-        square_bbox[2] = min(h-1, square_bbox[2])
-        square_bbox[3] = min(w-1, square_bbox[3])
+        self.confine_in_area(square_bbox)
 
         return square_bbox, [padding[1], padding[3], padding[0], padding[2]] # (left right top bottom)
 
@@ -354,7 +365,7 @@ class HRNetTrainer:
         end = time()
         load_time = 0
         comp_time = 0
-        GAN_TRAIN_STEP = 0
+        GAN_TRAIN_STEP = self.args.gan_train_step 
         
         for step, data in enumerate(self.train_loader):
             # if step < 1500:
@@ -376,7 +387,8 @@ class HRNetTrainer:
             for_bbox = bboxes[:,0,:,1:].contiguous() # (bs, num_track, 4)  4 coordinates
             gt_bbox = bboxes[:,1,:,1:].contiguous()
             back_bbox = bboxes[:,2,:,1:].contiguous()
-            gen_bbox = ((for_bbox+back_bbox)/2).long().float()
+            # gen_bbox = ((for_bbox+back_bbox)/2).long().float()
+            gen_bbox = bboxes[:,1,:,1:].data.clone().contiguous()
 
             ###################### TODO: wrap extract mask accoring to coordinate to a function ###################################
             with torch.no_grad():
@@ -385,23 +397,23 @@ class HRNetTrainer:
             input = torch.cat([for_instance_masks, input_without_mask, back_instance_masks], dim=1)
             ##################### TODO: my hrnet forward ###########################
             # 1. get coarse rgb and seg and (y1, 255-x2, y2, 255-x1)
-            coarse_rgb, coarse_seg, coarse_gen_bbox = self.coarse_model(input=input) 
+            # coarse_rgb, coarse_seg, coarse_gen_bbox = self.coarse_model(input=input) 
+            coarse_rgb, coarse_seg = self.coarse_model(input=input) 
             # (bs, 3, 128, 256), (bs, 1, 128, 256)
             # expect coarse_gen_bbox (bs, num_track, 4)
+            ################# TODO: enable iou loss after finding a suitable structure inside HRNet to predict bbox ########
             # 2. calculate IOU, if >0.3 then use generated bbox, otherwise use average
-            iou = self.IOULoss(gt_bbox=gt_bbox, gen_bbox=coarse_gen_bbox)  # (bs, num_track)
-            flattened_coarse_gen_bbox = coarse_gen_bbox.view(-1, 4)
-            flattened_gen_bbox = gen_bbox.view(-1, 4)
-            ###########TODO#############
+            # iou = self.IOULoss(gt_bbox=gt_bbox, gen_bbox=coarse_gen_bbox)  # (bs, num_track)
+            # flattened_coarse_gen_bbox = coarse_gen_bbox.view(-1, 4)
+            # flattened_gen_bbox = gen_bbox.view(-1, 4)
             # big_iou = iou.view(-1).gt(0)
             # flattened_coarse_gen_bbox[big_iou] = flattened_coarse_gen_bbox[big_iou]
-            if self.epoch>1:
-                for i, iou_score in enumerate(iou.view(-1).tolist()):
-                    if iou_score>0.5:
-                        flattened_gen_bbox[i] = flattened_coarse_gen_bbox[i]     # python will modify gen_bbox
+            # for i, iou_score in enumerate(iou.view(-1).tolist()):
+            #     if iou_score>0.8:
+            #         flattened_gen_bbox[i] = flattened_coarse_gen_bbox[i]     # python will modify gen_bbox
             # 3. calculate mask (union of gen_bbox with gt_bbox)
             with torch.no_grad():
-                gen_instance_masks, gt_instance_masks = self.make_instance_masks(for_bbox=gen_bbox, back_bbox=gt_bbox, gt_x=gt_x, bs=batch_size)
+                gen_instance_masks, gt_instance_masks = self.make_instance_masks(for_bbox=gen_bbox.detach(), back_bbox=gt_bbox, gt_x=gt_x, bs=batch_size)
                 union_mask = gen_instance_masks.byte() | gt_instance_masks.byte()
                 merged_union_mask = union_mask[:,0,:,:] | union_mask[:,1,:,:] | union_mask[:,2,:,:] | union_mask[:,3,:,:]
                 outside_mask = (1-merged_union_mask)[:,None,:,:]        # expect (bs, 1, 128, 256)
@@ -410,7 +422,7 @@ class HRNetTrainer:
             ################# TODO: think carefully whether we need instance cross entropy ####################
             # coarse_instance_rgb, coarse_instance_seg = self.get_coarse_instance(rgb=coarse_rgb, seg=coarse_seg, bbox=coarse_gen_bbox)
             # gt_instance_rgb, gt_instance_seg = self.get_coarse_instance(rgb=gt_x, seg=gt_seg, bbox=gt_bbox) # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
-            coarse_instance_rgb = self.get_coarse_instance(rgb=coarse_rgb, bbox=coarse_gen_bbox)
+            coarse_instance_rgb = self.get_coarse_instance(rgb=coarse_rgb, bbox=gen_bbox.detach())
             gt_instance_rgb = self.get_coarse_instance(rgb=gt_x, bbox=gt_bbox) # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
             with torch.no_grad():
                 for_instance_rgb = self.get_coarse_instance(rgb=input_without_mask[:,1:4,:,:], bbox=for_bbox)
@@ -418,48 +430,75 @@ class HRNetTrainer:
             # (bs*num_track,3,64,64), (bs*num_track,20,64,64)
             # 3. update outputs and store them
             prefix = 'coarse'
-            loss_dict[prefix+'_iou_loss'] = -torch.mean(iou)    # minimize -iou, expect iou to be high
-            if self.epoch<=30:
-                loss_dict[prefix+'_l1_glb_loss'] = self.L1Loss(coarse_rgb, gt_x)
+            # loss_dict[prefix+'_iou_loss'] = -torch.mean(iou)    # minimize -iou, expect iou to be high
+            if self.epoch<=10:
+                loss_dict[prefix+'_l1_glb_loss'] = 80 * self.L1Loss(coarse_rgb, gt_x)
                 # loss_dict[prefix+'_ce_glb_loss']  = 0.1 * self.CELoss(coarse_seg, (gt_seg).long().squeeze(1))    # from (bs, 1, H, W) to (bs, H, W)
             else:
-                loss_dict[prefix+'_l1_glb_loss']  = self.L1Loss(torch.masked_select(coarse_rgb,outside_mask), torch.masked_select(gt_x,outside_mask))
+                loss_dict[prefix+'_l1_glb_loss']  = 80 * self.L1Loss(torch.masked_select(coarse_rgb,outside_mask), torch.masked_select(gt_x,outside_mask))
                 # loss_dict[prefix+'_ce_glb_loss']  = 0.1 * torch.mean(torch.masked_select(self.CELoss_no_reduction(coarse_seg, gt_seg.long().squeeze(1)), outside_mask.squeeze(1)))    # from (bs, 1, H, W) to (bs, H, W)
-            loss_dict[prefix+'_vgg_ins_loss'] = self.VGGLoss(output=coarse_instance_rgb, target=gt_instance_rgb)
-            loss_dict[prefix+'_vgg_glb_loss'] = self.VGGLoss(output=coarse_rgb, target=gt_x)
-            loss_dict[prefix+'_ce_glb_loss']  = 0.1 * self.CELoss(coarse_seg, gt_seg.long().squeeze(1))    # from (bs, 1, H, W) to (bs, H, W)
+            loss_dict[prefix+'_vgg_ins_loss'] = 20 * self.VGGLoss(output=coarse_instance_rgb, target=gt_instance_rgb)
+            loss_dict[prefix+'_vgg_glb_loss'] = 20 * self.VGGLoss(output=coarse_rgb, target=gt_x)
+            loss_dict[prefix+'_ce_glb_loss']  = 10 * self.CELoss(coarse_seg, gt_seg.long().squeeze(1))    # from (bs, 1, H, W) to (bs, H, W)
             # loss_dict[prefix+'_ce_ins_loss']  = 0.1 * self.CELoss(coarse_instance_seg, gt_instance_seg.long().squeeze(1))
 
             ######################################### GAN LOSS #####################################################################
-            D_fake_frame_prob, D_real_frame_prob = self.frame_global_disc_model(coarse_rgb.detach()), self.frame_global_disc_model(gt_x)
-            D_fake_ins_prob, D_real_ins_prob = self.ins_global_disc_model(coarse_instance_rgb.detach()), self.ins_global_disc_model(gt_instance_rgb)
-            D_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
-            D_real_video_prob = self.ins_video_disc_model(middle=gt_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
-            G_fake_frame_prob, G_fake_ins_prob = self.frame_global_disc_model(coarse_rgb), self.ins_global_disc_model(coarse_instance_rgb)
-            G_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb, first=for_instance_rgb, last=back_instance_rgb)
 
 
-            loss_dict['disc_frame_loss']    = self.FrameDisc_GLoss(G_fake_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.FrameDisc_GLoss(G_fake_frame_prob, True)*0
-            loss_dict['disc_frame_real_loss'] = self.FrameDisc_DLoss(D_real_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.FrameDisc_DLoss(D_real_frame_prob, True)*0
-            loss_dict['disc_frame_fake_loss'] = self.FrameDisc_DLoss(D_fake_frame_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.FrameDisc_DLoss(D_fake_frame_prob, False)*0
+            bs = gt_x.size()[0]
+            num_track = self.args.num_track_per_img
+            valid = torch.ones((bs), requires_grad=False).cuda(self.args.rank)
+            fake  = torch.zeros((bs), requires_grad=False).cuda(self.args.rank)
+            valid_ins = torch.ones((bs*num_track), requires_grad=False).cuda(self.args.rank)
+            fake_ins  = torch.zeros((bs*num_track), requires_grad=False).cuda(self.args.rank)
+
+            # high value for bad prediction and low value for good prediction
+            loss_dict['disc_frame_loss']    =   self.BCELoss(self.frame_global_disc_model(coarse_rgb), valid)
+            loss_dict['disc_frame_real_loss'] = self.BCELoss(self.frame_global_disc_model(gt_x),valid)
+            loss_dict['disc_frame_fake_loss'] = self.BCELoss(self.frame_global_disc_model(coarse_rgb.detach()), fake)
 
                                                     
-            loss_dict['disc_video_loss']    = self.VideoDisc_GLoss(G_fake_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.VideoDisc_GLoss(G_fake_video_prob, True)*0
-            loss_dict['disc_video_real_loss'] = self.VideoDisc_DLoss(D_real_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.VideoDisc_DLoss(D_real_video_prob, True)*0
-            loss_dict['disc_video_fake_loss'] = self.VideoDisc_DLoss(D_fake_video_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.VideoDisc_DLoss(D_fake_video_prob, False)*0
+            loss_dict['disc_video_loss']    =   self.BCELoss(self.ins_video_disc_model(middle=coarse_instance_rgb, first=for_instance_rgb, last=back_instance_rgb), valid_ins)
+            loss_dict['disc_video_real_loss'] = self.BCELoss(self.ins_video_disc_model(middle=gt_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb), valid_ins)
+            loss_dict['disc_video_fake_loss'] = self.BCELoss(self.ins_video_disc_model(middle=coarse_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb), fake_ins)
 
-            loss_dict['disc_ins_loss']    = self.InsDisc_GLoss(G_fake_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.InsDisc_GLoss(G_fake_ins_prob, True)*0
-            loss_dict['disc_ins_real_loss'] = self.InsDisc_DLoss(D_real_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.InsDisc_DLoss(D_real_ins_prob, True)*0
-            loss_dict['disc_ins_fake_loss'] = self.InsDisc_DLoss(D_fake_ins_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-                                                self.InsDisc_DLoss(D_fake_ins_prob, False)*0
+            loss_dict['disc_ins_loss']    =     self.BCELoss(self.ins_global_disc_model(coarse_instance_rgb), valid_ins)
+            loss_dict['disc_ins_real_loss'] =   self.BCELoss(self.ins_global_disc_model(gt_instance_rgb), valid_ins)
+            loss_dict['disc_ins_fake_loss'] =   self.BCELoss(self.ins_global_disc_model(coarse_instance_rgb.detach()), fake_ins)
+
+            if self.global_step < GAN_TRAIN_STEP:
+                for key, value in loss_dict.items():
+                    if key.startswith('disc_'):
+                        loss_dict[key] = loss_dict[key] * 0
+
+
+            # D_fake_frame_prob, D_real_frame_prob = self.frame_global_disc_model(coarse_rgb.detach()), self.frame_global_disc_model(gt_x)
+            # D_fake_ins_prob, D_real_ins_prob = self.ins_global_disc_model(coarse_instance_rgb.detach()), self.ins_global_disc_model(gt_instance_rgb)
+            # D_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
+            # D_real_video_prob = self.ins_video_disc_model(middle=gt_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
+            # G_fake_frame_prob, G_fake_ins_prob = self.frame_global_disc_model(coarse_rgb), self.ins_global_disc_model(coarse_instance_rgb)
+            # G_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb, first=for_instance_rgb, last=back_instance_rgb)
+            # loss_dict['disc_frame_loss']    = self.FrameDisc_GLoss(G_fake_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.FrameDisc_GLoss(G_fake_frame_prob, True)*0
+            # loss_dict['disc_frame_real_loss'] = self.FrameDisc_DLoss(D_real_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.FrameDisc_DLoss(D_real_frame_prob, True)*0
+            # loss_dict['disc_frame_fake_loss'] = self.FrameDisc_DLoss(D_fake_frame_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.FrameDisc_DLoss(D_fake_frame_prob, False)*0
+
+                                                    
+            # loss_dict['disc_video_loss']    = self.VideoDisc_GLoss(G_fake_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.VideoDisc_GLoss(G_fake_video_prob, True)*0
+            # loss_dict['disc_video_real_loss'] = self.VideoDisc_DLoss(D_real_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.VideoDisc_DLoss(D_real_video_prob, True)*0
+            # loss_dict['disc_video_fake_loss'] = self.VideoDisc_DLoss(D_fake_video_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.VideoDisc_DLoss(D_fake_video_prob, False)*0
+
+            # loss_dict['disc_ins_loss']    = self.InsDisc_GLoss(G_fake_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.InsDisc_GLoss(G_fake_ins_prob, True)*0
+            # loss_dict['disc_ins_real_loss'] = self.InsDisc_DLoss(D_real_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.InsDisc_DLoss(D_real_ins_prob, True)*0
+            # loss_dict['disc_ins_fake_loss'] = self.InsDisc_DLoss(D_fake_ins_prob, False) if self.global_step > GAN_TRAIN_STEP else \
+            #                                     self.InsDisc_DLoss(D_fake_ins_prob, False)*0
             ##########################################################################################################################
             loss = 0
             for i in loss_dict.values():
@@ -500,13 +539,14 @@ class HRNetTrainer:
                             cur_batch=self.step+1, tot_batch=len(self.train_loader),
                             load_time=load_time, comp_time=comp_time)
                     # log = '\n\tcoarse l1_glb [{l1_glb:.3f}] vgg_ins [{vgg_ins:.3f}] vgg_glb [{vgg_glb:.3f}] ce_glb [{ce_glb:.3f}] ce_ins [{ce_ins:.3f}] -iou [{iou:.3f}]'.format(
-                    log = '\n\tcoarse l1_glb [{l1_glb:.3f}] vgg_ins [{vgg_ins:.3f}] vgg_glb [{vgg_glb:.3f}] ce_glb [{ce_glb:.3f}] -iou [{iou:.3f}]'.format(
+                    # log = '\n\tcoarse l1_glb [{l1_glb:.3f}] vgg_ins [{vgg_ins:.3f}] vgg_glb [{vgg_glb:.3f}] ce_glb [{ce_glb:.3f}] -iou [{iou:.3f}]'.format(
+                    log = '\n\tcoarse l1_glb [{l1_glb:.3f}] vgg_ins [{vgg_ins:.3f}] vgg_glb [{vgg_glb:.3f}] ce_glb [{ce_glb:.3f}] '.format(
                             l1_glb=step_loss_record_dict['coarse_l1_glb_loss_record'],
                             vgg_glb=step_loss_record_dict['coarse_vgg_glb_loss_record'],
                             vgg_ins=step_loss_record_dict['coarse_vgg_ins_loss_record'],
                             ce_glb=step_loss_record_dict['coarse_ce_glb_loss_record'],
                             # ce_ins=step_loss_record_dict['coarse_ce_ins_loss_record'],
-                            iou=step_loss_record_dict['coarse_iou_loss_record']
+                            # iou=step_loss_record_dict['coarse_iou_loss_record']
                         )
                     log+= ' all [{all:.3f}]'.format(all=step_loss_record_dict['coarse_all_loss_record'])
                     log_main+=log
@@ -602,7 +642,8 @@ class HRNetTrainer:
                 for_instance_masks, back_instance_masks = self.make_instance_masks(for_bbox=for_bbox, back_bbox=back_bbox, gt_x=gt_x, bs=batch_size)
                 input = torch.cat([data['seg1'], data['frame1'], data['frame3'], data['seg3']], dim=1).cuda(self.args.rank, non_blocking=True)
                 input = torch.cat([for_instance_masks, input, back_instance_masks], dim=1)
-                coarse_rgb, coarse_seg, coarse_gen_bbox = self.coarse_model(input=input) 
+                coarse_rgb, coarse_seg = self.coarse_model(input=input) 
+                # coarse_rgb, coarse_seg, coarse_gen_bbox = self.coarse_model(input=input) 
  
                 # rgb criteria
                 step_losses['l1']    = self.L1Loss(coarse_rgb, gt_x)
@@ -688,16 +729,20 @@ class HRNetTrainer:
 
     def load_coarse_model(self):
         if self.args.pretrained_coarse:
-            new_ckpt = OrderedDict()
             device = torch.device('cpu')
-            # coarse_model_dict = self.model.module.coarse_model.state_dict()
-            coarse_model_dict = self.coarse_model.state_dict()
             ckpt = torch.load(self.args.pretrained_coarse_model, map_location=device)
-            for key,item in ckpt['coarse_model'].items():
-                new_ckpt[key] = item
-            coarse_model_dict.update(new_ckpt)
-            self.coarse_model.load_state_dict(coarse_model_dict)
+            self.coarse_model.load_state_dict(ckpt['coarse_model'])
             self.coarse_opt.load_state_dict(ckpt['coarse_opt'])
+
+            if self.args.pretrained_disc:
+                self.frame_global_disc_model.load_state_dict(ckpt['frame_global_disc_model'])
+                self.ins_global_disc_model.load_state_dict(ckpt['ins_global_disc_model'])
+                self.ins_video_disc_model.load_state_dict(ckpt['ins_video_disc_model'])
+                self.frame_global_disc_opt.load_state_dict(ckpt['frame_global_disc_opt'])
+                self.ins_global_disc_opt.load_state_dict(ckpt['ins_global_disc_opt'])
+                self.ins_video_disc_opt.load_state_dict(ckpt['ins_video_disc_opt'])
+                print('successful loading pretrained discriminators')
+
             self.epoch = ckpt['epoch']+1
             print('successful loading pretrained coarse model')
 

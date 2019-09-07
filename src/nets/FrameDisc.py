@@ -36,126 +36,125 @@ class FrameGlobalDiscriminator(nn.Module):
 	def __init__(self, args):
 		super(FrameGlobalDiscriminator, self).__init__()
 		self.args=args
+		self.w = args.input_w
+		self.h = args.input_h
 		self.input_dim = 3 
 		self.layer = nn.Sequential(
-				nn.Conv2d(self.input_dim, 16, 3, 1, 1),
+				nn.Conv2d(self.input_dim, 16, 3, 1, 1),          # 16,w,h
 				nn.LeakyReLU(0.2,inplace=False),
 
-				nn.Conv2d(16, 32, 5, 1, 2),
+				nn.Conv2d(16, 32, 5, 1, 2),						 # 32,w,h
 				nn.BatchNorm2d(32),
 				nn.LeakyReLU(0.2,inplace=False),
 
 				# downsize 1 64*64*64
-				nn.Conv2d(32, 64, 3, 2, 1),
+				nn.Conv2d(32, 64, 3, 2, 1),						 # 64,w//2,h//2
 				nn.LeakyReLU(0.2, inplace=True),
-				ResnetBlock(64, 64, 3),
+				ResnetBlock(64, 64, 3),							
 				# downsize 2 96*32*32
-				nn.Conv2d(64, 96, 3, 2, 1),
+				nn.Conv2d(64, 96, 3, 2, 1),						 # 96,w//4,h//4
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetBlock(96, 96, 3),
 				# downsize 3 128*16*16
-				nn.Conv2d(96, 128, 3, 2, 1),
+				nn.Conv2d(96, 128, 3, 2, 1),					 # 128,w//8,h//8
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetBlock(128, 128, 3),
 				# downsize 4 192*8*8
-				nn.Conv2d(128, 192, 3, 2, 1),
+				nn.Conv2d(128, 192, 3, 2, 1),					 # 192,w//16,h//16
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetBlock(192, 192, 3),
 				# out layer
-				nn.Conv2d(192, 192, 3, 1, 1),
-				nn.AvgPool2d(8)
 			)
 
-	def forward(self, x, seg, bboxes=None):
+		self.linear = nn.Linear(192*self.h*self.w//256, 1)
+		self.sigmoid = nn.Sigmoid()
+
+	def forward(self, x):
 		input = x
-		if self.args.seg_disc:
-			input = torch.cat([x, seg], dim=1)
+		bs = input.size()[0]
 		output = self.layer(input)
-		output = output.view(-1, 192).mean(dim=1)
-		return output
+		output = self.linear(output.view(bs, -1))
+		return self.sigmoid(output)
 	
 
 class InstanceSNDiscriminator(nn.Module):
 	def __init__(self, args):
 		super(InstanceSNDiscriminator, self).__init__()
 		self.args=args
+		self.w = args.fast_input_w
+		self.h = args.fast_input_h
 		self.input_dim = 3
 		self.layer = nn.Sequential(
-				SpectralNorm(nn.Conv2d(self.input_dim, 16, 3, 1, 1)),
+				SpectralNorm(nn.Conv2d(self.input_dim, 16, 3, 1, 1)),  # 16,w,h
 				nn.LeakyReLU(0.2,inplace=False),
 
-				SpectralNorm(nn.Conv2d(16, 32, 5, 1, 2)),
+				SpectralNorm(nn.Conv2d(16, 32, 5, 1, 2)),			   # 32,w,h
 				nn.LeakyReLU(0.2,inplace=False),
 
 				# downsize 1 64*64*64
-				SpectralNorm(nn.Conv2d(32, 64, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(32, 64, 3, 2, 1)),			   # 64,w//2,h//2
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(64, 64, 3),
 				# downsize 2 96*32*32
-				SpectralNorm(nn.Conv2d(64, 96, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(64, 96, 3, 2, 1)),			   # 96,w//4,h//4
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(96, 96, 3),
 				# downsize 3 128*16*16
-				SpectralNorm(nn.Conv2d(96, 128, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(96, 128, 3, 2, 1)),			   # 128,w//8,h//8
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(128, 128, 3),
-				SpectralNorm(nn.Conv2d(128, 128, 3, 1, 1)),
-				nn.AvgPool2d(16)
 			)
+		self.linear = nn.Linear(128*self.h*self.w//64, 1)
+		self.sigmoid = nn.Sigmoid()
 
-	def forward(self, x, seg, bboxes=None):
+	def forward(self, x):
 		input = x
-		if self.args.seg_disc:
-			input = torch.cat([x, seg], dim=1)
+		bs = input.size()[0]
 		output = self.layer(input)
-		output = output.view(-1, 128).mean(dim=1)
-		return output
+		output = self.linear(output.view(bs, -1))
+		return self.sigmoid(output)
 
 
 class VideoSNDiscriminator(nn.Module):
 	def __init__(self, args):
 		super(VideoSNDiscriminator, self).__init__()
 		self.args=args
+		self.w = args.fast_input_w
+		self.h = args.fast_input_h
 		self.input_dim = 3
 		self.layer = nn.Sequential(
 				SpectralNorm(nn.Conv2d(3*self.input_dim, 32, 3, 1, 1)),
 				nn.LeakyReLU(0.2,inplace=False),
 
-				SpectralNorm(nn.Conv2d(32, 64, 5, 1, 2)),
+				SpectralNorm(nn.Conv2d(32, 64, 5, 1, 2)),        			# 64,w,h
 				nn.LeakyReLU(0.2,inplace=False),
-				SpectralNorm(nn.Conv2d(64, 32, 3, 1, 1)),
+				SpectralNorm(nn.Conv2d(64, 32, 3, 1, 1)),					# 32,w,h
 				nn.LeakyReLU(0.2,inplace=False),
 
 				# downsize 1 32*64*64
-				SpectralNorm(nn.Conv2d(32, 32, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(32, 32, 3, 2, 1)),					# 32,w//2,h//2
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(32, 32, 3),
 				# ResnetBlock(32, 32, 3),
 
 				# downsize 2 64*32*32
-				SpectralNorm(nn.Conv2d(32, 64, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(32, 64, 3, 2, 1)),					# 64,w//4,h//4
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(64, 64, 3),
 				# downsize 3 128*16*16
-				SpectralNorm(nn.Conv2d(64, 128, 3, 2, 1)),
+				SpectralNorm(nn.Conv2d(64, 128, 3, 2, 1)),					# 128,w//8,h//8
 				nn.LeakyReLU(0.2, inplace=True),
 				ResnetSNBlock(128, 128, 3),
-				# downsize 4 256*8*8
-				# SpectralNorm(nn.Conv2d(128, 256, 3, 2, 1)),
-				# nn.LeakyReLU(0.2, inplace=True),
-				# ResnetSNBlock(256, 256, 3),
-				# out layer
-				SpectralNorm(nn.Conv2d(128, 128, 3, 1, 1)),
-				# SpectralNorm(nn.Conv2d(256, 256, 3, 1, 1)),
-				# nn.Tanh(),
-				nn.AvgPool2d(16)
 			)
+		self.linear = nn.Linear(128*self.h*self.w//64, 1)
+		self.sigmoid = nn.Sigmoid()
 
-	def forward(self, x, seg, input_x, input_seg, bboxes=None):
-		input = torch.cat([x, seg, input_x, input_seg], dim=1) if self.args.seg_disc else torch.cat([x, input_x], dim=1)
+	def forward(self, middle, first, last):
+		input = torch.cat([first, middle, last], dim=1)
+		bs = input.size()[0]
 		output = self.layer(input)
-		output = output.view(-1, 128).mean(dim=1)
-		return output
+		output = self.linear(output.view(bs, -1))
+		return self.sigmoid(output)
 
 # class FrameLocalDiscriminator(nn.Module):
 # 	def __init__(self, args):

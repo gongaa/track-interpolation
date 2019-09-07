@@ -84,8 +84,10 @@ class DatasetFolder(data.Dataset):
 		self.args = args
 		self.img_height = 128 #if self.args.split == 'train' else 256
 		self.img_width  = 256 #if self.args.split == 'train' else 512
-		self.mean = (0.287, 0.3253, 0.284)
-		self.std = (0.1792, 0.18213, 0.1799898)
+		# self.mean = (0.287, 0.3253, 0.284)
+		# self.std = (0.1792, 0.18213, 0.1799898)
+		self.mean = (0.5, 0.5, 0.5)
+		self.std = (0.5, 0.5, 0.5)
 		if self.args.dataset=='cityscape':
 			if self.args.split == 'train':
 				self.img_dir = args.img_dir if args.img_dir is not None else "/data/linz/proj/Dataset/Cityscape/leftImg_sequence/leftImg8bit_sequence_128x256/"   # 256x512

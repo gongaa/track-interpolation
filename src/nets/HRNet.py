@@ -19,9 +19,11 @@ class BasicBlock(nn.Module):
 		super(BasicBlock, self).__init__()
 		self.conv1 = conv3x3(inplanes, planes, stride)
 		# self.bn1 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
+		self.bn1 = nn.InstanceNorm2d(planes, momentum=BN_MOMENTUM)
 		self.relu = nn.LeakyReLU(0.2,inplace=False)
 		self.conv2 = conv3x3(planes, planes)
 		# self.bn2 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
+		self.bn2 = nn.InstanceNorm2d(planes, momentum=BN_MOMENTUM)
 		self.downsample = downsample
 		self.stride = stride
 
@@ -29,11 +31,11 @@ class BasicBlock(nn.Module):
 		residual = x
 
 		out = self.conv1(x)
-		# out = self.bn1(out)
+		out = self.bn1(out)
 		out = self.relu(out)
 
 		out = self.conv2(out)
-		# out = self.bn2(out)
+		out = self.bn2(out)
 
 		if self.downsample is not None:
 			residual = self.downsample(x)
@@ -51,13 +53,15 @@ class Bottleneck(nn.Module):
 		super(Bottleneck, self).__init__()
 		self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
 		# self.bn1 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
+		self.bn1 = nn.InstanceNorm2d(planes, momentum=BN_MOMENTUM)
 		self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
 							   padding=1, bias=False)
 		# self.bn2 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
+		self.bn2 = nn.InstanceNorm2d(planes, momentum=BN_MOMENTUM)
 		self.conv3 = nn.Conv2d(planes, planes * self.expansion, kernel_size=1,
 							   bias=False)
-		# self.bn3 = nn.BatchNorm2d(planes * self.expansion,
-		#                      momentum=BN_MOMENTUM)
+		# self.bn3 = nn.BatchNorm2d(planes * self.expansion, momentum=BN_MOMENTUM)
+		self.bn3 = nn.InstanceNorm2d(planes * self.expansion, momentum=BN_MOMENTUM)
 		self.relu = nn.LeakyReLU(0.2,inplace=False)
 		self.downsample = downsample
 		self.stride = stride
@@ -66,15 +70,15 @@ class Bottleneck(nn.Module):
 		residual = x
 
 		out = self.conv1(x)
-		# out = self.bn1(out)
+		out = self.bn1(out)
 		out = self.relu(out)
 
 		out = self.conv2(out)
-		# out = self.bn2(out)
+		out = self.bn2(out)
 		out = self.relu(out)
 
 		out = self.conv3(out)
-		# out = self.bn3(out)
+		out = self.bn3(out)
 
 		if self.downsample is not None:
 			residual = self.downsample(x)
@@ -89,13 +93,7 @@ class HighResolutionModule(nn.Module):
 	def __init__(self, num_branches, blocks, num_blocks, num_inchannels,
 				 num_channels, fuse_method, multi_scale_output=True):
 		super(HighResolutionModule, self).__init__()
-		# HIGH4_RESOLUTION_NET.STAGE4 = CN()
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_MODULES = 1
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_BRANCHES = 4
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_BLOCKS = [4, 4, 4, 4]
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_CHANNELS = [64, 128, 256, 512]
-		# HIGH4_RESOLUTION_NET.STAGE4.BLOCK = 'BASIC'
-		# HIGH4_RESOLUTION_NET.STAGE4.FUSE_METHOD = 'SUM'
+		
 		self._check_branches(
 			num_branches, blocks, num_blocks, num_inchannels, num_channels)
 
@@ -134,8 +132,8 @@ class HighResolutionModule(nn.Module):
 				nn.Conv2d(self.num_inchannels[branch_index],
 						  num_channels[branch_index] * block.expansion,
 						  kernel_size=1, stride=stride, bias=False),
-				# nn.BatchNorm2d(num_channels[branch_index] * block.expansion,
-				#           momentum=BN_MOMENTUM),
+				# nn.BatchNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
+				nn.InstanceNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
 			)
 
 		layers = []
@@ -170,13 +168,10 @@ class HighResolutionModule(nn.Module):
 			for j in range(num_branches):
 				if j > i:
 					fuse_layer.append(nn.Sequential(
-						nn.Conv2d(num_inchannels[j],
-								  num_inchannels[i],
-								  1,
-								  1,
-								  0,
-								  bias=False)))
-						# nn.BatchNorm2d(num_inchannels[i], momentum=BN_MOMENTUM)))
+						nn.Conv2d(num_inchannels[j], num_inchannels[i], 1, 1, 0, bias=False),
+						# nn.BatchNorm2d(num_inchannels[i], momentum=BN_MOMENTUM))
+						nn.InstanceNorm2d(num_inchannels[i], momentum=BN_MOMENTUM))
+						)
 				elif j == i:
 					fuse_layer.append(None)
 				else:
@@ -185,19 +180,15 @@ class HighResolutionModule(nn.Module):
 						if k == i - j - 1:
 							num_outchannels_conv3x3 = num_inchannels[i]
 							conv3x3s.append(nn.Sequential(
-								nn.Conv2d(num_inchannels[j],
-										  num_outchannels_conv3x3,
-										  3, 2, 1, bias=False)))
-								# nn.BatchNorm2d(num_outchannels_conv3x3, 
-								#           momentum=BN_MOMENTUM)))
+								nn.Conv2d(num_inchannels[j], num_outchannels_conv3x3, 3, 2, 1, bias=False),
+								# nn.BatchNorm2d(num_outchannels_conv3x3, momentum=BN_MOMENTUM)))
+								nn.InstanceNorm2d(num_outchannels_conv3x3, momentum=BN_MOMENTUM)))
 						else:
 							num_outchannels_conv3x3 = num_inchannels[j]
 							conv3x3s.append(nn.Sequential(
-								nn.Conv2d(num_inchannels[j],
-										  num_outchannels_conv3x3,
-										  3, 2, 1, bias=False),
-								# nn.BatchNorm2d(num_outchannels_conv3x3,
-								#           momentum=BN_MOMENTUM),
+								nn.Conv2d(num_inchannels[j], num_outchannels_conv3x3, 3, 2, 1, bias=False),
+								# nn.BatchNorm2d(num_outchannels_conv3x3, momentum=BN_MOMENTUM),
+								nn.InstanceNorm2d(num_outchannels_conv3x3, momentum=BN_MOMENTUM),
 								nn.LeakyReLU(0.2,inplace=False)))
 					fuse_layer.append(nn.Sequential(*conv3x3s))
 			fuse_layers.append(nn.ModuleList(fuse_layer))
@@ -325,9 +316,11 @@ class HRNet(nn.Module):
 		self.conv1 = nn.Conv2d(self.in_channel, 64, kernel_size=3, stride=1, padding=1,
 							   bias=True)
 		# self.bn1 = nn.BatchNorm2d(64, momentum=BN_MOMENTUM)
+		self.bn1 = nn.InstanceNorm2d(64, momentum=BN_MOMENTUM)
 		self.conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1,
 							   bias=True)
 		# self.bn2 = nn.BatchNorm2d(64, momentum=BN_MOMENTUM)
+		self.bn2 = nn.InstanceNorm2d(64, momentum=BN_MOMENTUM)
 		self.relu = nn.LeakyReLU(0.2,inplace=False)
 
 		self.layer1 = self._make_layer(Bottleneck, 64, 64, 4)
@@ -373,13 +366,16 @@ class HRNet(nn.Module):
 					stride=1,
 					padding=0),
 				# nn.BatchNorm2d(last_inp_channels, momentum=BN_MOMENTUM),
+				nn.InstanceNorm2d(last_inp_channels, momentum=BN_MOMENTUM),
 				nn.LeakyReLU(0.2,inplace=False),
 				nn.Conv2d(
 					in_channels=last_inp_channels,
 					out_channels = self.rgb_out_dim,
 					kernel_size=3,
 					stride=1,
-					padding=1)
+					padding=1),
+				################### TODO: test wheter use tanh
+				nn.Tanh()
 			)
 
 		self.seg_layer = nn.Sequential(
@@ -390,6 +386,7 @@ class HRNet(nn.Module):
 					stride=1,
 					padding=0),
 				# nn.BatchNorm2d(last_inp_channels, momentum=BN_MOMENTUM),
+				nn.InstanceNorm2d(last_inp_channels, momentum=BN_MOMENTUM),
 				nn.LeakyReLU(0.2,inplace=False),
 				nn.Conv2d(
 					in_channels=last_inp_channels,
@@ -399,9 +396,9 @@ class HRNet(nn.Module):
 					padding=1)
 			)
 
-		self.bbox_layer = nn.Sequential(
-				nn.Linear(1024*16*32, 4*4)  # bs is neglected, first 4 is num_track, second is coordinate
-		)
+		# self.bbox_layer = nn.Sequential(
+		# 		nn.Linear(1024*16*32, 4*4)  # bs is neglected, first 4 is num_track, second is coordinate
+		# )
 
 	def _make_transition_layer( self, num_channels_pre_layer, num_channels_cur_layer):
 		num_branches_cur = len(num_channels_cur_layer)
@@ -413,13 +410,9 @@ class HRNet(nn.Module):
 				if num_channels_cur_layer[i] != num_channels_pre_layer[i]:
 					transition_layers.append(nn.Sequential(
 						nn.Conv2d(num_channels_pre_layer[i],
-								  num_channels_cur_layer[i],
-								  3,
-								  1,
-								  1,
-								  bias=False),
-						# nn.BatchNorm2d(
-						#   num_channels_cur_layer[i], momentum=BN_MOMENTUM),
+								  num_channels_cur_layer[i], 3, 1, 1, bias=False),
+						# nn.BatchNorm2d(num_channels_cur_layer[i], momentum=BN_MOMENTUM),
+						nn.InstanceNorm2d(num_channels_cur_layer[i], momentum=BN_MOMENTUM),
 						nn.LeakyReLU(0.2,inplace=False)))
 				else:
 					transition_layers.append(None)
@@ -433,6 +426,7 @@ class HRNet(nn.Module):
 						nn.Conv2d(
 							inchannels, outchannels, 3, 2, 1, bias=False),
 						# nn.BatchNorm2d(outchannels, momentum=BN_MOMENTUM),
+						nn.InstanceNorm2d(outchannels, momentum=BN_MOMENTUM),
 						nn.LeakyReLU(0.2,inplace=False)))
 				transition_layers.append(nn.Sequential(*conv3x3s))
 
@@ -445,6 +439,7 @@ class HRNet(nn.Module):
 				nn.Conv2d(inplanes, planes * block.expansion,
 						  kernel_size=1, stride=stride, bias=False),
 				# nn.BatchNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
+				nn.InstanceNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
 			)
 
 		layers = []
@@ -456,13 +451,7 @@ class HRNet(nn.Module):
 		return nn.Sequential(*layers)
 
 	def _make_stage(self, layer_config, num_inchannels,multi_scale_output=True):
-		# HIGH4_RESOLUTION_NET.STAGE4 = CN()
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_MODULES = 1
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_BRANCHES = 4
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_BLOCKS = [4, 4, 4, 4]
-		# HIGH4_RESOLUTION_NET.STAGE4.NUM_CHANNELS = [64, 128, 256, 512]
-		# HIGH4_RESOLUTION_NET.STAGE4.BLOCK = 'BASIC'
-		# HIGH4_RESOLUTION_NET.STAGE4.FUSE_METHOD = 'SUM'
+
 		num_modules = layer_config['NUM_MODULES']
 		num_branches = layer_config['NUM_BRANCHES']
 		num_blocks = layer_config['NUM_BLOCKS']
@@ -496,8 +485,10 @@ class HRNet(nn.Module):
 		x = input	
 		bs = x.size()[0]
 		x = self.conv1(x)
+		x = self.bn1(x)
 		x = self.relu(x)
 		x = self.conv2(x)
+		x = self.bn2(x)
 		x = self.relu(x)
 		x = self.layer1(x)
 
@@ -532,7 +523,7 @@ class HRNet(nn.Module):
 
 		##################TODO: check in_channel of the FC layer ##########################
 		# self.args.logger.info(x[2].view(bs, -1).size())
-		gen_bbox = self.bbox_layer(x[2].view(bs, -1)).view(bs, 4, 4)
+		# gen_bbox = self.bbox_layer(x[2].view(bs, -1)).view(bs, 4, 4)
 		# Upsampling
 		x0_h, x0_w = x[0].size(2), x[0].size(3)
 		x1 = F.upsample(x[1], size=(x0_h, x0_w), mode='bilinear')
@@ -545,7 +536,7 @@ class HRNet(nn.Module):
 		rgb_out = self.rgb_layer(x)
 		seg_out = self.seg_layer(x)
 
-		return rgb_out, seg_out, gen_bbox
+		return rgb_out, seg_out#, gen_bbox
 
 
 class ResnetBlock(nn.Module):

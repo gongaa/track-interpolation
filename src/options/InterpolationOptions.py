@@ -62,7 +62,7 @@ class InterpolationOptions():
 												help='Batch size (over multiple gpu)')
 		self.parser.add_argument('--epochs', dest='epochs', 
 												type=int,
-												default=30, 
+												default=50, 
 												help='Number of training epochs')      
 		self.parser.add_argument('--interval', dest='interval',
 												help='training optimizer loss weigh of feat',
@@ -194,13 +194,16 @@ class InterpolationOptions():
 										default='InstanceSNDiscriminator', 
 										help='model to use',
 										choices=['InstanceSNDiscriminator'])  					  
-		self.parser.add_argument('--ins_video_disc_model', dest='ins_videl_disc_model', 
+		self.parser.add_argument('--ins_video_disc_model', dest='ins_video_disc_model', 
 										default='VideoSNDiscriminator', 
 										help='model to use',
 										choices=['VideoSNDiscriminator'])  					  
 		self.parser.add_argument('--pretrained_coarse', dest='pretrained_coarse',
 								help='whether train coarse model ', 
 								action='store_true')
+		self.parser.add_argument('--pretrain_disc', dest='pretrained_disc',
+								help='whether train discriminators ', 
+								action='store_false')
 		self.parser.add_argument('--pretrained_coarse_model', dest='pretrained_coarse_model',
 										help='directory to load models', default="log",
 										type=str)
@@ -210,19 +213,22 @@ class InterpolationOptions():
 										default="adamax")
 		self.parser.add_argument('--coarse_lr', dest='coarse_learning_rate', 
 										help='coarse learning rate',
-										default=0.001, type=float)	
+										default=0.0001, type=float)	
 		self.parser.add_argument('--disc_frame_lr', dest='frame_global_disc_learning_rate', 
 										help='coarse learning rate',
-										default=0.001, type=float)	
+										default=0.0001, type=float)	
 		self.parser.add_argument('--disc_ins_lr', dest='ins_global_disc_learning_rate', 
 										help='coarse learning rate',
-										default=0.001, type=float)	
+										default=0.0001, type=float)	
 		self.parser.add_argument('--load_coarse', dest='load_coarse',
 												help='whether load coarse model ', 
 												action='store_true')
 		self.parser.add_argument('--train_coarse', dest='train_coarse',
 												help='whether train coarse model ', 
 												action='store_false')
+		self.parser.add_argument('--gan_train_step', dest='gan_train_step',
+												help='step to start discriminator training ', 
+												default=3000, type=int)
 
 
 		self.initialized = True
