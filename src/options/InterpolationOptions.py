@@ -81,6 +81,8 @@ class InterpolationOptions():
 		self.parser.add_argument('--start_epoch', dest='start_epoch',
 												help='starting epoch',
 												default=0, type=int)
+		self.parser.add_argument('--decay_epoch', dest='decay_epoch', help='epoch from which to start lr decay',
+												type=int, default=10)
 		self.parser.add_argument('--disp_interval', dest='disp_interval',
 												help='number of iterations to display',
 												default=100, type=int)
@@ -213,13 +215,13 @@ class InterpolationOptions():
 										default="adamax")
 		self.parser.add_argument('--coarse_lr', dest='coarse_learning_rate', 
 										help='coarse learning rate',
-										default=0.0001, type=float)	
+										default=0.0002, type=float)	
 		self.parser.add_argument('--disc_frame_lr', dest='frame_global_disc_learning_rate', 
 										help='coarse learning rate',
-										default=0.0001, type=float)	
+										default=0.0002, type=float)	
 		self.parser.add_argument('--disc_ins_lr', dest='ins_global_disc_learning_rate', 
 										help='coarse learning rate',
-										default=0.0001, type=float)	
+										default=0.0002, type=float)	
 		self.parser.add_argument('--load_coarse', dest='load_coarse',
 												help='whether load coarse model ', 
 												action='store_true')

@@ -100,8 +100,11 @@ class HRNetTrainer:
             self.frame_global_disc_opt = torch.optim.Adam(list(self.frame_global_disc_model.parameters()), lr = args.frame_global_disc_learning_rate, betas=(0.5, 0.999))
             self.ins_global_disc_opt = torch.optim.Adam(list(self.ins_global_disc_model.parameters()), lr=args.ins_global_disc_learning_rate, betas=(0.5, 0.999)) 
             self.ins_video_disc_opt = torch.optim.Adam(list(self.ins_video_disc_model.parameters()), lr=args.ins_global_disc_learning_rate, betas=(0.5, 0.999)) 
-            # self.coarse_opt = torch.optim.Adamax(list(self.model.module.coarse_model.parameters()), lr=args.coarse_learning_rate)
             
+            self.coarse_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.coarse_opt, lr_lambda=LambdaLR(args.epochs, args.start_epoch, args.decay_epoch).step)
+            self.frame_global_disc_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.frame_global_disc_opt, lr_lambda=LambdaLR(args.epochs, args.start_epoch, args.decay_epoch).step)
+            self.ins_global_disc_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.ins_global_disc_opt, lr_lambda=LambdaLR(args.epochs, args.start_epoch, args.decay_epoch).step)
+            self.ins_video_disc_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.ins_video_disc_opt, lr_lambda=LambdaLR(args.epochs, args.start_epoch, args.decay_epoch).step)
 
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
             self.train_loader = torch.utils.data.DataLoader(
@@ -319,8 +322,6 @@ class HRNetTrainer:
 
     def get_coarse_instance(self, rgb, bbox):
         # (bs,3,H,W) (bs,1,H,W) (bs, num_track,4)
-        # for_patch = for_img[i, :, int(for_box[1]):int(for_box[3])+1, int(for_box[2]):int(for_box[4])+1]
-        # for_patch = F.interpolate(for_patch.unsqueeze(0), size=(self.H, self.W), mode='bilinear', align_corners=True)
         bs,_,h,w = rgb.size()
         num_track = bbox.size()[1]
         instance_rgb = []
@@ -331,7 +332,8 @@ class HRNetTrainer:
                     square_bbox, padding = self.get_square_bbox_and_padding(bbox=bbox[i,j], h=h, w=w)
                 ins_rgb = rgb[i,:,square_bbox[0]:square_bbox[2]+1, square_bbox[1]:square_bbox[3]+1]
                 # ins_seg = seg[i,:,square_bbox[0]:square_bbox[2]+1, square_bbox[1]:square_bbox[3]+1]
-                pad = nn.ZeroPad2d(padding)
+                # pad = nn.ZeroPad2d(padding)
+                pad = nn.ConstantPad2d(padding, 1.0)     # 1->1 -1->0
                 instance_rgb.append(F.interpolate(pad(ins_rgb).unsqueeze(0), size=(64,64), mode='bilinear', align_corners=True))
                 # instance_seg.append(F.interpolate(pad(ins_seg).unsqueeze(0), size=(64,64), mode='nearest'))
 
@@ -447,10 +449,19 @@ class HRNetTrainer:
 
             bs = gt_x.size()[0]
             num_track = self.args.num_track_per_img
-            valid = torch.ones((bs), requires_grad=False).cuda(self.args.rank)
-            fake  = torch.zeros((bs), requires_grad=False).cuda(self.args.rank)
-            valid_ins = torch.ones((bs*num_track), requires_grad=False).cuda(self.args.rank)
-            fake_ins  = torch.zeros((bs*num_track), requires_grad=False).cuda(self.args.rank)
+            # soft labels: valid from 0.7-1.2, fake from 0-0.3
+            valid = torch.FloatTensor(bs).fill_(0.5).cuda(self.args.rank) + 0.5*torch.rand(bs).cuda(self.args.rank)        # default to requires_grad=False
+            fake  = torch.zeros(bs).cuda(self.args.rank) + 0.3 * torch.rand(bs).cuda(self.args.rank)
+            valid_ins = torch.FloatTensor(bs*num_track).fill_(0.5).cuda(self.args.rank) + 0.5*torch.rand(bs*num_track).cuda(self.args.rank)
+            fake_ins  = torch.zeros(bs*num_track).cuda(self.args.rank) + 0.3 * torch.rand(bs*num_track).cuda(self.args.rank)
+            # noisy label for discriminator
+            with torch.no_grad():
+                for i in range(bs): 
+                    if torch.rand(1)<0.05: 
+                        fake[i] = 1-fake[i]
+                for i in range(bs*num_track):
+                    if torch.rand(1)<0.05:
+                        fake_ins[i] = 1-fake_ins[i]
 
             # high value for bad prediction and low value for good prediction
             loss_dict['disc_frame_loss']    =   self.BCELoss(self.frame_global_disc_model(coarse_rgb), valid)
@@ -471,34 +482,6 @@ class HRNetTrainer:
                     if key.startswith('disc_'):
                         loss_dict[key] = loss_dict[key] * 0
 
-
-            # D_fake_frame_prob, D_real_frame_prob = self.frame_global_disc_model(coarse_rgb.detach()), self.frame_global_disc_model(gt_x)
-            # D_fake_ins_prob, D_real_ins_prob = self.ins_global_disc_model(coarse_instance_rgb.detach()), self.ins_global_disc_model(gt_instance_rgb)
-            # D_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
-            # D_real_video_prob = self.ins_video_disc_model(middle=gt_instance_rgb.detach(), first=for_instance_rgb, last=back_instance_rgb)
-            # G_fake_frame_prob, G_fake_ins_prob = self.frame_global_disc_model(coarse_rgb), self.ins_global_disc_model(coarse_instance_rgb)
-            # G_fake_video_prob = self.ins_video_disc_model(middle=coarse_instance_rgb, first=for_instance_rgb, last=back_instance_rgb)
-            # loss_dict['disc_frame_loss']    = self.FrameDisc_GLoss(G_fake_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.FrameDisc_GLoss(G_fake_frame_prob, True)*0
-            # loss_dict['disc_frame_real_loss'] = self.FrameDisc_DLoss(D_real_frame_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.FrameDisc_DLoss(D_real_frame_prob, True)*0
-            # loss_dict['disc_frame_fake_loss'] = self.FrameDisc_DLoss(D_fake_frame_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.FrameDisc_DLoss(D_fake_frame_prob, False)*0
-
-                                                    
-            # loss_dict['disc_video_loss']    = self.VideoDisc_GLoss(G_fake_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.VideoDisc_GLoss(G_fake_video_prob, True)*0
-            # loss_dict['disc_video_real_loss'] = self.VideoDisc_DLoss(D_real_video_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.VideoDisc_DLoss(D_real_video_prob, True)*0
-            # loss_dict['disc_video_fake_loss'] = self.VideoDisc_DLoss(D_fake_video_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.VideoDisc_DLoss(D_fake_video_prob, False)*0
-
-            # loss_dict['disc_ins_loss']    = self.InsDisc_GLoss(G_fake_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.InsDisc_GLoss(G_fake_ins_prob, True)*0
-            # loss_dict['disc_ins_real_loss'] = self.InsDisc_DLoss(D_real_ins_prob, True) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.InsDisc_DLoss(D_real_ins_prob, True)*0
-            # loss_dict['disc_ins_fake_loss'] = self.InsDisc_DLoss(D_fake_ins_prob, False) if self.global_step > GAN_TRAIN_STEP else \
-            #                                     self.InsDisc_DLoss(D_fake_ins_prob, False)*0
             ##########################################################################################################################
             loss = 0
             for i in loss_dict.values():
@@ -516,6 +499,11 @@ class HRNetTrainer:
             self.frame_global_disc_opt.step()
             self.ins_global_disc_opt.step()
             self.ins_video_disc_opt.step()
+
+            self.coarse_lr_scheduler.step()
+            self.frame_global_disc_lr_scheduler.step()
+            self.ins_global_disc_lr_scheduler.step()
+            self.ins_video_disc_lr_scheduler.step()
             ##########################################################################
             comp_time += time() - end
             end = time()
@@ -571,31 +559,6 @@ class HRNetTrainer:
                                                 self.global_step)
 
                     self.writer.add_image(img_name, image_set, self.global_step)
-
-
-        # if self.args.rank == 0:
-        #     for key, value in step_loss_record_dict.items():
-        #         epoch_loss_record_dict[key]+=value
-
-        #     if epoch_loss_record_dict['data_cnt'] != 0:
-        #         for key, value in epoch_loss_record_dict.items():
-        #             if key!='data_cnt':
-        #                 epoch_loss_record_dict[key] /= epoch_loss_record_dict['data_cnt']
-
-        #     log_main = 'Epoch [{epoch:d}/{tot_epoch:d}]'.format(epoch=self.epoch, tot_epoch=self.args.epochs)
-
-        #     log = '\n\tcoarse l1_glb [{l1_glb:.3f}] vgg_ins [{vgg_ins:.3f}] vgg_glb [{vgg_glb:.3f}] ce_glb [{ce_glb:.3f}] ce_ins [{ce_ins:.3f}]'.format(
-        #             l1_glb=step_loss_record_dict['coarse_l1_glb_loss_record'],
-        #             vgg_glb=step_loss_record_dict['coarse_vgg_glb_loss_record'],
-        #             vgg_ins=step_loss_record_dict['coarse_vgg_ins_loss_record'],
-        #             ce_glb=step_loss_record_dict['coarse_ce_glb_loss_record'],
-        #             ce_ins=step_loss_record_dict['coarse_ce_ins_loss_record']
-        #         )
-        #     log_main+=log
-        #     log_main += '\n\t\t\t\t\t\t\tloss total [{:.3f}]'.format(epoch_loss_record_dict['all_loss_record'])
-        #     self.args.logger.info(
-        #         log_main
-        #     )
 
 
     def validate(self):
@@ -716,12 +679,16 @@ class HRNetTrainer:
             'epoch': self.epoch + 1,
             'coarse_model': self.coarse_model.state_dict(),
             'coarse_opt': self.coarse_opt.state_dict(),
+            'coarse_lr_scheduler': self.coarse_lr_scheduler.state_dict(),
             'frame_global_disc_model': self.frame_global_disc_model.state_dict(),
             'frame_global_disc_opt': self.frame_global_disc_opt.state_dict(),
+            'frame_global_disc_lr_scheduler': self.frame_global_disc_lr_scheduler.state_dict(),
             'ins_global_disc_model': self.ins_global_disc_model.state_dict(),
             'ins_global_disc_opt': self.ins_global_disc_opt.state_dict(),
+            'ins_global_disc_lr_scheduler': self.ins_global_disc_lr_scheduler.state_dict(),
             'ins_video_disc_model': self.ins_video_disc_model.state_dict(),
-            'ins_video_disc_opt': self.ins_video_disc_opt.state_dict()
+            'ins_video_disc_opt': self.ins_video_disc_opt.state_dict(),
+            'ins_video_disc_lr_scheduler': self.ins_video_disc_lr_scheduler.state_dict()
         }
         
         torch.save(save_dict, save_name)
@@ -733,6 +700,7 @@ class HRNetTrainer:
             ckpt = torch.load(self.args.pretrained_coarse_model, map_location=device)
             self.coarse_model.load_state_dict(ckpt['coarse_model'])
             self.coarse_opt.load_state_dict(ckpt['coarse_opt'])
+            self.coarse_lr_scheduler.load_state_dict(ckpt['coarse_lr_scheduler'])
 
             if self.args.pretrained_disc:
                 self.frame_global_disc_model.load_state_dict(ckpt['frame_global_disc_model'])
@@ -741,6 +709,9 @@ class HRNetTrainer:
                 self.frame_global_disc_opt.load_state_dict(ckpt['frame_global_disc_opt'])
                 self.ins_global_disc_opt.load_state_dict(ckpt['ins_global_disc_opt'])
                 self.ins_video_disc_opt.load_state_dict(ckpt['ins_video_disc_opt'])
+                self.frame_global_disc_lr_scheduler.load_state_dict(ckpt['frame_global_disc_lr_scheduler'])
+                self.ins_global_disc_lr_scheduler.load_state_dict(ckpt['ins_global_disc_lr_scheduler'])
+                self.ins_video_disc_lr_scheduler.load_state_dict(ckpt['ins_video_disc_lr_scheduler'])
                 print('successful loading pretrained discriminators')
 
             self.epoch = ckpt['epoch']+1

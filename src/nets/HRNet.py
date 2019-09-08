@@ -28,7 +28,7 @@ class BasicBlock(nn.Module):
 		self.stride = stride
 
 	def forward(self, x):
-		residual = x
+		# residual = x
 
 		out = self.conv1(x)
 		out = self.bn1(out)
@@ -37,10 +37,10 @@ class BasicBlock(nn.Module):
 		out = self.conv2(out)
 		out = self.bn2(out)
 
-		if self.downsample is not None:
-			residual = self.downsample(x)
+		# if self.downsample is not None:
+			# residual = self.downsample(x)
 
-		out = out + residual
+		# out = out + residual
 		out = self.relu(out)
 
 		return out
@@ -67,7 +67,7 @@ class Bottleneck(nn.Module):
 		self.stride = stride
 
 	def forward(self, x):
-		residual = x
+		# residual = x
 
 		out = self.conv1(x)
 		out = self.bn1(out)
@@ -80,10 +80,10 @@ class Bottleneck(nn.Module):
 		out = self.conv3(out)
 		out = self.bn3(out)
 
-		if self.downsample is not None:
-			residual = self.downsample(x)
+		# if self.downsample is not None:
+			# residual = self.downsample(x)
 
-		out = out + residual
+		# out = out + residual
 		out = self.relu(out)
 
 		return out
@@ -126,15 +126,15 @@ class HighResolutionModule(nn.Module):
 
 	def _make_one_branch(self, branch_index, block, num_blocks, num_channels, stride=1):
 		downsample = None
-		if stride != 1 or \
-		   self.num_inchannels[branch_index] != num_channels[branch_index] * block.expansion:
-			downsample = nn.Sequential(
-				nn.Conv2d(self.num_inchannels[branch_index],
-						  num_channels[branch_index] * block.expansion,
-						  kernel_size=1, stride=stride, bias=False),
-				# nn.BatchNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
-				nn.InstanceNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
-			)
+		# if stride != 1 or \
+		#    self.num_inchannels[branch_index] != num_channels[branch_index] * block.expansion:
+		# 	downsample = nn.Sequential(
+		# 		nn.Conv2d(self.num_inchannels[branch_index],
+		# 				  num_channels[branch_index] * block.expansion,
+		# 				  kernel_size=1, stride=stride, bias=False),
+		# 		# nn.BatchNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
+		# 		nn.InstanceNorm2d(num_channels[branch_index] * block.expansion, momentum=BN_MOMENTUM),
+		# 	)
 
 		layers = []
 		layers.append(block(self.num_inchannels[branch_index],
@@ -434,13 +434,13 @@ class HRNet(nn.Module):
 
 	def _make_layer(self, block, inplanes, planes, blocks, stride=1):
 		downsample = None
-		if stride != 1 or inplanes != planes * block.expansion:
-			downsample = nn.Sequential(
-				nn.Conv2d(inplanes, planes * block.expansion,
-						  kernel_size=1, stride=stride, bias=False),
-				# nn.BatchNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
-				nn.InstanceNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
-			)
+		# if stride != 1 or inplanes != planes * block.expansion:
+		# 	downsample = nn.Sequential(
+		# 		nn.Conv2d(inplanes, planes * block.expansion,
+		# 				  kernel_size=1, stride=stride, bias=False),
+		# 		# nn.BatchNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
+		# 		nn.InstanceNorm2d(planes * block.expansion, momentum=BN_MOMENTUM),
+		# 	)
 
 		layers = []
 		layers.append(block(inplanes, planes, stride, downsample))
